@@ -1,0 +1,43 @@
+# Save in your repo as: .github/workflows/job-agent.yml
+name: job-agent
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"      # every 10 min (GitHub may delay runs)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "run = search now, test = only send a Telegram test message"
+        type: choice
+        options: [run, test]
+        default: run
+      hours:
+        description: "How many hours back to search (use 24 for the first run)"
+        default: "24"
+
+concurrency:
+  group: job-agent
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: seen_jobs.json
+          key: seen-${{ github.run_id }}
+          restore-keys: seen-
+      - name: Run agent
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          HOURS_OLD: ${{ github.event.inputs.hours || '3' }}
+        run: python job_agent.py ${{ github.event.inputs.mode == 'test' && '--test' || '' }}

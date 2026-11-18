@@ -28,7 +28,10 @@ SEARCH_TERMS = [
     "graduate engineer trainee", "fresher software developer",
 ]
 LOCATIONS = ["Bengaluru, Karnataka", "Hyderabad, Telangana", "Karnataka, India"]
-SITES = ["linkedin", "indeed", "naukri", "google"]
+SITES = ["indeed", "naukri"]      # Google Jobs returns nothing from GitHub servers, so it is removed
+# LinkedIn blocks GitHub's shared IPs (HTTP 429), so it gets a small, slow, separate search
+LINKEDIN_TERMS = ["software engineer", "full stack developer", "automation engineer", "app developer"]
+LINKEDIN_LOCATIONS = ["Bengaluru, Karnataka", "Hyderabad, Telangana"]
 HOURS_OLD = int(os.getenv("HOURS_OLD", 3))
 MAX_APPLICANTS = 100
 RESULTS_PER_SEARCH = 30
@@ -77,24 +80,40 @@ def telegram(text):
         return False
 
 
+def _search(sites, term, loc, frames):
+    """Runs one search. Returns number of jobs found (0 on failure)."""
+    try:
+        df = scrape_jobs(
+            site_name=sites, search_term=term, location=loc,
+            results_wanted=RESULTS_PER_SEARCH, hours_old=HOURS_OLD, country_indeed="India",
+        )
+        n = 0 if df is None else len(df)
+        if n:
+            frames.append(df)
+        print(f"[ok] {sites} | {term} | {loc} -> {n}")
+        return n
+    except Exception as e:
+        print(f"[skip] {sites} | {term} | {loc}: {str(e)[:120]}")
+        return 0
+
+
 def collect():
     frames = []
     for term in SEARCH_TERMS:
         for loc in LOCATIONS:
-            try:
-                df = scrape_jobs(
-                    site_name=SITES, search_term=term,
-                    google_search_term=f"{term} jobs near {loc} since yesterday",
-                    location=loc, results_wanted=RESULTS_PER_SEARCH,
-                    hours_old=HOURS_OLD, country_indeed="India",
-                )
-                n = 0 if df is None else len(df)
-                if n:
-                    frames.append(df)
-                print(f"[ok] {term} | {loc} -> {n}")
-            except Exception as e:
-                print(f"[skip] {term} | {loc}: {str(e)[:120]}")
+            _search(SITES, term, loc, frames)
             time.sleep(random.uniform(1, 2))
+
+    # LinkedIn: few searches, long pauses, stop early if it keeps returning nothing (blocked)
+    empty_in_a_row = 0
+    for term in LINKEDIN_TERMS:
+        for loc in LINKEDIN_LOCATIONS:
+            if empty_in_a_row >= 3:
+                print("[linkedin] looks blocked, skipping the rest this run")
+                break
+            n = _search(["linkedin"], term, loc, frames)
+            empty_in_a_row = empty_in_a_row + 1 if n == 0 else 0
+            time.sleep(random.uniform(6, 10))
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True).drop_duplicates(subset=["job_url"])
